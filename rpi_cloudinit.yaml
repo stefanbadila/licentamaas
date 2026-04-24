@@ -22,5 +22,5 @@ runcmd:
   - |
     curl -sfL https://get.k3s.io | \
     K3S_URL=https://192.168.0.10:6443 \
-    K3S_TOKEN=K1006470ae22798e076630e1d5dd5bcd766e5c6c02c35ac15b8718c44e28e480837::server:2c340eaaccefc4e9bd122285612cf294 \
+    K3S_TOKEN= x \
     sh -
