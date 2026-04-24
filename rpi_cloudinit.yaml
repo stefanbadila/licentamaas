@@ -1,0 +1,26 @@
+#cloud-config
+
+runcmd:
+  # 1. Update si Instalare pachete de sistem
+  - apt-get update
+  - apt-get install -y iptables nfs-common
+  
+  # 2. ortam Legacy mode pentru compatibilitate K3s
+  - update-alternatives --set iptables /usr/sbin/iptables-legacy
+  - update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+  
+  # 3. Incarcam modulele de kernel necesare pentru K8s networking
+  - modprobe overlay
+  - modprobe br_netfilter
+
+  # 5. Setam proxy-ul MAAS 
+  - export http_proxy=http://192.168.0.10:8000
+  - export https_proxy=http://192.168.0.10:8000
+  - export NO_PROXY=localhost,127.0.0.1,192.168.0.0/24,192.168.0.10,.local
+
+  # 6. Instalam K3s Worker
+  - |
+    curl -sfL https://get.k3s.io | \
+    K3S_URL=https://192.168.0.10:6443 \
+    K3S_TOKEN=K1006470ae22798e076630e1d5dd5bcd766e5c6c02c35ac15b8718c44e28e480837::server:2c340eaaccefc4e9bd122285612cf294 \
+    sh -

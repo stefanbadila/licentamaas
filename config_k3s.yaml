@@ -1,0 +1,101 @@
+rbac:
+  create: true
+
+hub:
+  config:
+    KubeSpawner:
+      # Timpul de asteptare pentru pornirea pod-ului 
+      start_timeout: 600
+      # Timpul de asteptare pentru raspunsul HTTP al notebook-ului
+      http_timeout: 120
+    JupyterHub:
+      hub_connect_ip: 192.168.0.10
+      use_internal_ip: true
+      authenticator_class: native
+      admin_users:
+        - stefan
+    NativeAuthenticator:
+      enable_signup: true
+      open_signup: false
+      minimum_password_length: 8
+
+  nodeSelector:
+    kubernetes.io/hostname: stefan-zenbook-ux425ua-um425ua
+  
+  extraConfig:
+    # --- WORKAROUND PENTRU INSTALARE PACHETE ---
+    00-install-native-auth: |
+      import subprocess
+      import sys
+      subprocess.check_call([sys.executable, "-m", "pip", "install", "jupyterhub-nativeauthenticator"])
+    
+    # --- LIMITELE TALE DE RESURSE ---
+    resource_limits: |
+      def custom_limits(spawner):
+          if spawner.user.name in ['admin', 'stefan']:
+              spawner.cpu_limit = 1.0
+              spawner.mem_limit = '2G'
+              spawner.mem_guarantee = '1G'
+              spawner.storage_capacity = '2Gi'  
+      
+      c.KubeSpawner.pre_spawn_hook = custom_limits
+  extraConfig:
+    00-install-native-auth: |
+      import subprocess
+      import sys
+      subprocess.check_call([sys.executable, "-m", "pip", "install", "jupyterhub-nativeauthenticator"])
+
+    01-force-authorize: |
+      from nativeauthenticator.orm import UserInfo
+      def authorize_users(spawner):
+      c.NativeAuthenticator.open_signup = True
+      c.Authenticator.allowed_users = {'stefan', 'admin'}
+
+singleuser:
+  startTimeout: 600
+  storage:
+    type: dynamic
+    dynamic:
+      storageClass: jupyter-nfs-storage
+      pvcNameTemplate: claim-{username}
+    homeMountPath: /home/jovyan/work
+  nodeSelector: 
+      node-role: worker
+  image:
+    # Schimbam imaginea generica cu cea optimizata pentru K8s
+    name: quay.io/jupyterhub/k8s-singleuser-sample 
+  cpu:
+    limit: 2
+    guarantee: 1.2
+  memory:
+    limit: 2G
+    guarantee: 1G
+  # ADAUGA PROFILE 
+  profileList:
+    - display_name: "Standard (RPi 1)"
+      description: "Ruleaza pe resursele existente."
+      kubespawner_override:
+        cpu_guarantee: 0.5
+        mem_guarantee: "512M"
+    - display_name: "High Power (Needs Scale-out)"
+      description: "Va forta pornirea celui de-al doilea RPi daca primul este ocupat."
+      kubespawner_override:
+        cpu_guarantee: 2.5 # Valoare mare pentru a umple rapid nodul 1
+        mem_guarantee: "2G"
+
+proxy:
+  chp:
+    nodeSelector:
+      kubernetes.io/hostname: stefan-zenbook-ux425ua-um425ua
+
+prePuller:
+  hook:
+    enabled: false
+  continuous:
+    enabled: false
+
+scheduling:
+  userScheduler:
+    enabled: true
+  podPriority:
+    enabled: true

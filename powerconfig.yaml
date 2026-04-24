@@ -1,0 +1,30 @@
+name: my maas power control webhooks
+ip_address: 0.0.0.0
+port: 5000
+username: stefan
+password: Licenta2026
+
+devices:
+  - type: SmartThingDevice
+    name: p1
+    api_token: &global_token "cd347894-dc4a-4206-9fff-3b75ade6ac05"
+    device_id: 5bacaf45-77b5-4e33-ae3f-56185013e60b
+    off: main switch off
+    on: main switch on
+    query: switch
+
+  - type: SmartThingDevice
+    name: p2
+    api_token: *global_token  
+    device_id: 75a03748-29e0-428d-95b1-ed4945bb94c4
+    off: main switch off
+    on: main switch on
+    query: switch
+
+  - type: SmartThingDevice
+    name: p3
+    api_token: *global_token  
+    device_id: d54fda0c-0c4e-402f-908a-5330467055c3
+    off: main switch off
+    on: main switch on
+    query: switch
