@@ -1,26 +1,182 @@
 #cloud-config
 
+# Setează automat fusul orar al României
+timezone: Europe/Bucharest
+
+# 📦 CONFIGURARE PRE-BOOT: Scrie fișierele de proxy și agent înainte de rularea comenzilor
+write_files:
+  # A. Configurare Proxy dedicat pentru APT-ul nativ din sistem
+  - path: /etc/apt/apt.conf.d/99proxy
+    permissions: '0644'
+    owner: root:root
+    content: |
+      Acquire::http::Proxy "http://192.168.0.10:8000";
+      Acquire::https::Proxy "http://192.168.0.10:8000";
+
+  # B. Configurare Proxy dedicat pentru Docker Daemon (Permite containerului să compileze/tragă imagini)
+  - path: /etc/systemd/system/docker.service.d/http-proxy.conf
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Service]
+      Environment="HTTP_PROXY=http://192.168.0.10:8000"
+      Environment="HTTPS_PROXY=http://192.168.0.10:8000"
+      Environment="NO_PROXY=localhost,127.0.0.1,192.168.0.0/24,192.168.0.10,.local"
+
+  # C. Dockerfile configurat cu argumente de rețea dinamice pentru pip install
+  - path: /opt/rpi-agent/Dockerfile
+    permissions: '0644'
+    owner: root:root
+    content: |
+      FROM python:3.11-slim
+      ARG HTTP_PROXY
+      ARG HTTPS_PROXY
+      ENV http_proxy=$HTTP_PROXY
+      ENV https_proxy=$HTTPS_PROXY
+      RUN pip install --no-cache-dir psutil requests
+      COPY agent.py /app/agent.py
+      WORKDIR /app
+      CMD ["python", "agent.py"]
+
+  # D. Codul complet al agentului de telemetrie conectat la Flask
+  - path: /opt/rpi-agent/agent.py
+    permissions: '0644'
+    owner: root:root
+    content: |
+      import time
+      import socket
+      import requests
+      import psutil
+
+      FLASK_SERVER_IP = "192.168.0.10" 
+      FLASK_SERVER_URL = f"http://{FLASK_SERVER_IP}:5001/api/agent-metrics"
+
+      def get_cpu_temperature():
+          try:
+              with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                  return round(float(f.read()) / 1000.0, 1)
+          except:
+              return None
+
+      def get_uptime():
+          try:
+              with open('/proc/uptime', 'r') as f:
+                  uptime_seconds = float(f.readline().split()[0])
+              days = int(uptime_seconds // 86400)
+              hours = int((uptime_seconds % 86400) // 3600)
+              minutes = int((uptime_seconds % 3600) // 60)
+              if days > 0:
+                  return f"{days}d {hours}h {minutes}m"
+              return f"{hours}h {minutes}m"
+          except:
+              return "N/A"
+
+      if __name__ == "__main__":
+          net_init = psutil.net_io_counters()
+          prev_recv = net_init.bytes_recv
+          prev_sent = net_init.bytes_sent
+          prev_time = time.time()
+          psutil.cpu_percent(interval=None)
+          time.sleep(1.0) 
+          
+          while True:
+              try:
+                  current_time = time.time()
+                  time_delta = current_time - prev_time
+                  if time_delta <= 0: time_delta = 1.0
+                  
+                  net_now = psutil.net_io_counters()
+                  download_speed = round(((net_now.bytes_recv - prev_recv) / 1024.0) / time_delta, 1)
+                  upload_speed = round(((net_now.bytes_sent - prev_sent) / 1024.0) / time_delta, 1)
+                  
+                  prev_recv = net_now.bytes_recv
+                  prev_sent = net_now.bytes_sent
+                  prev_time = current_time
+                  
+                  payload = {
+                      "hostname": socket.gethostname(),
+                      "cpu_percentage": psutil.cpu_percent(interval=None),
+                      "memory_percentage": psutil.virtual_memory().percent,
+                      "memory_used": int(psutil.virtual_memory().used / (1024 * 1024)),
+                      "memory_max": int(psutil.virtual_memory().total / (1024 * 1024)),
+                      "cpu_temperature": get_cpu_temperature(),
+                      "uptime": get_uptime(),
+                      "download_speed_kbps": download_speed,
+                      "upload_speed_kbps": upload_speed
+                  }
+                  requests.post(FLASK_SERVER_URL, json=payload, timeout=1)
+              except:
+                  pass
+              time.sleep(1.0)
+
 runcmd:
-  # 1. Update si Instalare pachete de sistem
-  - apt-get update
-  - apt-get install -y iptables nfs-common
-  
-  # 2. ortam Legacy mode pentru compatibilitate K3s
+  # 0. Sincronizare timp și server NTP local
+  - timedatectl set-timezone Europe/Bucharest
+  - sed -i 's/^#\?NTP=.*/NTP=192.168.0.10/' /etc/systemd/timesyncd.conf
+  - systemctl restart systemd-timesyncd
+
+  # 1. Activăm cgroups nativ în configurația de boot Raspberry Pi
+  - sed -i '$ s/$/ cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1/' /boot/firmware/cmdline.txt
+
+  # 2. 🚀 DESCARCĂ ȘI INSTALEAZĂ DOCKER PRIN CURL (Modul unificat prin Proxy)
+  - |
+    # Exportăm proxy-ul pentru sesiunea curentă, garantând ieșirea scripturilor utilitare
+    export http_proxy=http://192.168.0.10:8000
+    export https_proxy=http://192.168.0.10:8000
+    export HTTP_PROXY=http://192.168.0.10:8000
+    export HTTPS_PROXY=http://192.168.0.10:8000
+    export NO_PROXY=localhost,127.0.0.1,192.168.0.0/24,192.168.0.10,.local
+
+    # Instalăm pachetele obligatorii de kernel pentru rețeaua Raspberry Pi și K3s
+    apt-get update
+    apt-get install -y linux-modules-extra-raspi iptables curl nfs-common
+    apt install -y nfs-common
+
+    # Preluăm scriptul oficial Docker și îl executăm securizat prin interpretorul sh
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sh get-docker.sh
+
+  # 3. Forțăm regulile iptables-legacy pentru conformitate cu K3s Networking
   - update-alternatives --set iptables /usr/sbin/iptables-legacy
   - update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-  
-  # 3. Incarcam modulele de kernel necesare pentru K8s networking
+
+  # 4. Încărcăm modulele de virtualizare în kernel-ul activ
   - modprobe overlay
   - modprobe br_netfilter
 
-  # 5. Setam proxy-ul MAAS 
-  - export http_proxy=http://192.168.0.10:8000
-  - export https_proxy=http://192.168.0.10:8000
-  - export NO_PROXY=localhost,127.0.0.1,192.168.0.0/24,192.168.0.10,.local
-
-  # 6. Instalam K3s Worker
+  # 5. Descărcare și instalare automată K3s Worker Node
   - |
+    export http_proxy=http://192.168.0.10:8000
+    export https_proxy=http://192.168.0.10:8000
+    export HTTP_PROXY=http://192.168.0.10:8000
+    export HTTPS_PROXY=http://192.168.0.10:8000
+    export NO_PROXY=localhost,127.0.0.1,192.168.0.0/24,192.168.0.10,.local
+
     curl -sfL https://get.k3s.io | \
     K3S_URL=https://192.168.0.10:6443 \
-    K3S_TOKEN= x \
-    sh -
+    K3S_TOKEN= \
+    sh -s 
+
+  # 6. CONSTRUIRE ȘI LANSARE AGENT DE TELEMETRIE ÎN CONTAINERUL NOU
+  - |
+    systemctl daemon-reload
+    systemctl enable docker
+    systemctl start docker
+    
+    cd /opt/rpi-agent
+    
+    # Construim imaginea trimițând argumentele proxy către Pip-ul intern din container
+    docker build \
+      --build-arg HTTP_PROXY=http://192.168.0.10:8000 \
+      --build-arg HTTPS_PROXY=http://192.168.0.10:8000 \
+      -t rpi-telemetry-agent .
+      
+    # Pornim containerul cu izolare eliminată la nivel de rețea și procese
+    docker run -d \
+      --name live-metrics-agent \
+      --restart always \
+      --net=host \
+      --pid=host \
+      -v /proc:/proc:ro \
+      -v /sys:/sys:ro \
+      rpi-telemetry-agent

@@ -7,7 +7,7 @@ password: Licenta2026
 devices:
   - type: SmartThingDevice
     name: p1
-    api_token: &global_token "cd347894-dc4a-4206-9fff-3b75ade6ac05"
+    api_token: &global_token "553bd955-e54f-40e7-bf41-82afe69c047e"
     device_id: 5bacaf45-77b5-4e33-ae3f-56185013e60b
     off: main switch off
     on: main switch on
